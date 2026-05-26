@@ -9,11 +9,12 @@ const taskbookCLI = (input, flags) => {
     return taskbook.displayArchive();
   }
 
-  if (flags.task) {
-    if (flags.multi) {
-      return taskbook.createTasksWithEditor();
-    }
+  // `-mt` is short-flag-bundled into move+task by minimist; treat as --multi-task.
+  if (flags.multiTask || (flags.move && flags.task)) {
+    return taskbook.createTasksWithEditor();
+  }
 
+  if (flags.task) {
     return taskbook.createTask(input);
   }
 

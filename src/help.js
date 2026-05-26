@@ -17,7 +17,7 @@ module.exports = `
       --help, -h         Display help message
       --list, -l         List items by attributes
       --move, -m         Move item between boards
-      --multi            Create multiple tasks using your editor (use with -t)
+      --multi-task, -mt  Create multiple tasks using your editor
       --note, -n         Create note
       --priority, -p     Update priority of task
       --restore, -r      Restore items from archive
@@ -46,6 +46,6 @@ module.exports = `
       $ tb --task @coding @reviews Review PR #42
       $ tb --task @coding Improve documentation
       $ tb --task Make some buttercream
-      $ tb --task --multi
+      $ tb --multi-task
       $ tb --timeline
 `;
