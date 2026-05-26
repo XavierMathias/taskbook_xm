@@ -10,6 +10,10 @@ const taskbookCLI = (input, flags) => {
   }
 
   if (flags.task) {
+    if (flags.multi) {
+      return taskbook.createTasksWithEditor();
+    }
+
     return taskbook.createTask(input);
   }
 

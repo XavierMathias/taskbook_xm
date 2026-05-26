@@ -1,10 +1,31 @@
 #!/usr/bin/env node
 'use strict';
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const {spawnSync} = require('child_process');
 const clipboardy = require('clipboardy');
 const Task = require('./task');
 const Note = require('./note');
 const Storage = require('./storage');
 const render = require('./render');
+
+const EDITOR_TEMPLATE = `# Taskbook Multi-Task Creation
+#
+# Enter one task per line below.
+# Lines starting with # are comments (ignored).
+# Empty lines are ignored.
+# You can use @board and p:X syntax on each line.
+#
+# Examples:
+#   Buy groceries
+#   @coding Fix bug #42 p:3
+#   @personal @health Schedule dentist appointment
+#
+# Save and close this file to create the tasks.
+# -------------------------------------------------
+
+`;
 
 class Taskbook {
   constructor(options = {}) {
@@ -375,6 +396,39 @@ class Taskbook {
     _data[id] = task;
     this._save(_data);
     render.successCreate(task);
+  }
+
+  createTasksWithEditor() {
+    const tmpFile = path.join(os.tmpdir(), `taskbook-${Date.now()}.txt`);
+    fs.writeFileSync(tmpFile, EDITOR_TEMPLATE, 'utf8');
+
+    const editorEnv = process.env.VISUAL || process.env.EDITOR ||
+      (process.platform === 'win32' ? 'notepad' : 'vim');
+    const [editorCmd, ...editorArgs] = editorEnv.split(/\s+/);
+
+    try {
+      const result = spawnSync(editorCmd, [...editorArgs, tmpFile], {stdio: 'inherit'});
+
+      if (result.error || result.status !== 0) {
+        return;
+      }
+
+      const lines = fs.readFileSync(tmpFile, 'utf8')
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line && !line.startsWith('#'));
+
+      if (lines.length === 0) {
+        render.missingDesc();
+        return;
+      }
+
+      lines.forEach(line => this.createTask(line.split(/\s+/)));
+    } finally {
+      if (fs.existsSync(tmpFile)) {
+        fs.unlinkSync(tmpFile);
+      }
+    }
   }
 
   deleteItems(ids) {

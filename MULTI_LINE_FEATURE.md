@@ -1,462 +1,454 @@
-# Taskbook Multi-Line Input Feature Implementation
+# Taskbook Multi-Line Task Creation with Editor
 
-## Project Overview
-Add a `--multi` flag to taskbook that allows creating multiple tasks through an interactive prompt, where each line becomes a separate task.
+## Feature Overview
+Add a `--multi` flag that opens the user's default editor (vim, nano, emacs, etc.) to create multiple tasks at once.
 
-## Current vs Proposed Behavior
+## User Experience
 
-### Current (Single Task)
-```bash
-$ tb -t "Buy groceries"
-# Creates 1 task
-```
-
-### Proposed (Multi-Line Input)
+### Command
 ```bash
 $ tb -t --multi
-# Prompts user for input:
-Enter tasks (one per line, empty line to finish):
-> Buy groceries
-> Call dentist
-> Write blog post
-> 
-✓ Created 3 tasks
 ```
 
-## Feature Requirements
+### Flow
+1. User runs `tb -t --multi`
+2. Taskbook creates a temporary file with a template
+3. Opens the file in user's `$EDITOR` (vim, nano, VS Code, etc.)
+4. User edits the file (add/remove/reorder tasks)
+5. User saves and closes the editor (`:wq` in vim, `Ctrl+X` in nano)
+6. Taskbook reads the file, parses tasks, creates them
+7. Shows confirmation message
 
-### User Experience
-1. User runs `tb -t --multi` or `tb --task --multi`
-2. System prompts: "Enter tasks (one per line, press Enter twice to finish):"
-3. User enters tasks, one per line
-4. User presses Enter on empty line to finish
-5. System creates all tasks and shows confirmation
+### Template File
+```
+# Taskbook Multi-Task Creation
+# 
+# Enter one task per line below
+# Lines starting with # are comments (ignored)
+# Empty lines are ignored
+# You can use @board and p:X syntax on each line
+#
+# Examples:
+#   Buy groceries
+#   @coding Fix bug #42 p:3
+#   @personal @health Schedule dentist appointment
+#
+# Save and close this file to create tasks
+# -------------------------------------------------
 
-### Technical Requirements
-- **Backward Compatible**: Existing `tb -t "task"` syntax must still work
-- **Interactive Input**: Use stdin to read multiple lines
-- **Empty Line Detection**: Two consecutive newlines or single empty line signals end of input
-- **Trim Whitespace**: Remove leading/trailing spaces from each task
-- **Skip Empty Lines**: Don't create tasks for blank lines
-- **Board/Priority Support**: Each task line can include `@board` and `p:X` syntax
-- **Exit Gracefully**: Handle Ctrl+C gracefully
-
-## Implementation Plan
-
-### Files to Modify
-
-#### 1. `cli.js` - Command Line Interface
-**Location**: `/cli.js` (root of project)
-
-**Changes Needed**:
-- Add `--multi` flag to the options parser
-- When `--multi` is detected with `-t` or `--task`, trigger interactive mode
-- Pass control to the multi-task creation function
-
-**Pseudocode**:
-```javascript
-// In cli.js, around where flags are parsed
-
-if (flags.task && flags.multi) {
-  // Call interactive multi-task creation
-  taskbook.createTasksInteractive();
-} else if (flags.task) {
-  // Existing single task creation
-  taskbook.createTask(input);
-}
 ```
 
-#### 2. `src/taskbook.js` - Core Logic
-**Location**: `/src/taskbook.js` (likely location)
+### After Editing
+```
+# User adds:
+Buy groceries
+@coding Fix bug #42 p:3
+@personal Call dentist
+Schedule team meeting p:2
 
-**New Function Needed**: `createTasksInteractive()`
+# Saves and closes
+```
 
-**Pseudocode**:
+### Output
+```
+✓ Created 4 tasks:
+  1. Buy groceries
+  2. @coding Fix bug #42 p:3
+  3. @personal Call dentist
+  4. Schedule team meeting p:2
+```
+
+## Why This Approach is Better
+
+### Advantages over readline-based input:
+1. **Full editing power** - Delete, reorder, copy/paste tasks
+2. **Visual overview** - See all tasks at once
+3. **Familiar workflow** - Like `git commit`, `crontab -e`, `visudo`
+4. **Works with ANY editor** - vim, nano, emacs, VS Code, Sublime
+5. **Comments/instructions** - Template can guide users
+6. **No learning curve** - Users already know their editor
+
+### Comparison to Other Options
+
+| Feature | System Editor | readline (Option 3) | Pipe Separator (Option 1) |
+|---------|--------------|---------------------|---------------------------|
+| Multi-line editing | ✅ Full power | ❌ Line by line | ❌ Single line |
+| Reorder tasks | ✅ Easy | ❌ Can't | ❌ Can't |
+| Delete/edit tasks | ✅ Before creation | ❌ Hard | ❌ Can't |
+| Visual overview | ✅ See all tasks | ❌ One at a time | ✅ In command |
+| Familiar to devs | ✅ Like git | ⚠️ Different | ⚠️ New syntax |
+| Works offline | ✅ Yes | ✅ Yes | ✅ Yes |
+
+## Implementation
+
+### Dependencies
 ```javascript
-createTasksInteractive() {
-  // 1. Display prompt
-  console.log('Enter tasks (one per line, press Enter twice to finish):');
+// Built-in Node.js modules (no npm install needed)
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execSync } = require('child_process');
+```
+
+### Core Function
+
+```javascript
+// In src/taskbook.js
+
+createTasksWithEditor() {
+  // 1. Create temporary file
+  const tmpDir = os.tmpdir();
+  const tmpFile = path.join(tmpDir, `taskbook-${Date.now()}.txt`);
   
-  // 2. Set up readline interface
-  const readline = require('readline');
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    prompt: '> '
-  });
+  // 2. Write template to file
+  const template = `# Taskbook Multi-Task Creation
+# 
+# Enter one task per line below
+# Lines starting with # are comments (ignored)
+# Empty lines are ignored
+# You can use @board and p:X syntax on each line
+#
+# Examples:
+#   Buy groceries
+#   @coding Fix bug #42 p:3
+#   @personal @health Schedule dentist appointment
+#
+# Save and close this file to create tasks
+# -------------------------------------------------
+
+`;
   
-  const tasks = [];
+  fs.writeFileSync(tmpFile, template, 'utf8');
   
-  // 3. Listen for each line
-  rl.on('line', (line) => {
-    const trimmed = line.trim();
+  // 3. Detect user's preferred editor
+  const editor = process.env.VISUAL || 
+                 process.env.EDITOR || 
+                 (process.platform === 'win32' ? 'notepad' : 'vim');
+  
+  try {
+    // 4. Open editor (blocks until user closes it)
+    execSync(`${editor} ${tmpFile}`, { 
+      stdio: 'inherit',
+      shell: true 
+    });
     
-    if (trimmed === '') {
-      // Empty line - finish input
-      rl.close();
-    } else {
-      // Add task to list
-      tasks.push(trimmed);
-      rl.prompt(); // Show prompt for next task
-    }
-  });
-  
-  // 4. When input is complete, create all tasks
-  rl.on('close', () => {
+    // 5. Read the file after editing
+    const content = fs.readFileSync(tmpFile, 'utf8');
+    
+    // 6. Parse tasks (ignore comments and empty lines)
+    const tasks = content
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line && !line.startsWith('#'));
+    
+    // 7. Delete temporary file
+    fs.unlinkSync(tmpFile);
+    
+    // 8. Create tasks
     if (tasks.length === 0) {
-      console.log('No tasks entered.');
+      this._render.missingTasks();
       return;
     }
     
-    // Create each task using existing createTask method
-    tasks.forEach(description => {
+    console.log(`\n✓ Created ${tasks.length} task${tasks.length === 1 ? '' : 's'}:`);
+    tasks.forEach((description, index) => {
       this.createTask(description);
+      console.log(`  ${index + 1}. ${description}`);
     });
     
-    console.log(`✓ Created ${tasks.length} task${tasks.length > 1 ? 's' : ''}`);
-  });
-  
-  // 5. Start prompting
-  rl.prompt();
+  } catch (error) {
+    // User cancelled or editor failed
+    if (fs.existsSync(tmpFile)) {
+      fs.unlinkSync(tmpFile);
+    }
+    
+    if (error.signal === 'SIGINT') {
+      console.log('\nTask creation cancelled.');
+    } else {
+      console.error('Error opening editor:', error.message);
+    }
+  }
 }
 ```
 
-#### 3. Update Help Text
-**Location**: Likely in `cli.js` or a separate help file
+### CLI Integration
 
-**Add to Usage**:
-```
---multi            Use with -t to create multiple tasks interactively
-```
-
-**Add to Examples**:
-```
-$ tb -t --multi
-$ tb --task --multi
-```
-
-### Dependencies Check
-Check if `readline` is already available (it's built into Node.js, so should be fine).
-
-## Testing Strategy
-
-### Manual Tests
-
-```bash
-# Test 1: Basic multi-task creation
-$ tb -t --multi
-Enter tasks (one per line, press Enter twice to finish):
-> Task 1
-> Task 2
-> Task 3
-> 
-✓ Created 3 tasks
-
-# Verify tasks were created
-$ tb
-
-# Test 2: Tasks with boards
-$ tb -t --multi
-> @coding Fix bug #42
-> @docs Update readme
-> 
-✓ Created 2 tasks
-
-# Test 3: Tasks with priority
-$ tb -t --multi
-> Deploy to production p:3
-> Review PR p:2
-> 
-✓ Created 2 tasks
-
-# Test 4: Empty input (edge case)
-$ tb -t --multi
-> 
-No tasks entered.
-
-# Test 5: Tasks with whitespace (should trim)
-$ tb -t --multi
->    Task with spaces   
-> 
-✓ Created 1 task
-
-# Test 6: Mixed boards and priority
-$ tb -t --multi
-> @work @urgent Fix security issue p:3
-> @personal Read documentation p:1
-> 
-✓ Created 2 tasks
-
-# Test 7: Ctrl+C cancellation
-$ tb -t --multi
-> Task 1
-> ^C
-# Should exit gracefully without creating partial tasks
-
-# Test 8: Backward compatibility (must still work)
-$ tb -t "Single task without --multi flag"
-✓ Created task 1
-```
-
-### Edge Cases to Handle
-
-1. **Empty lines in middle of input**: Should skip them
-   ```
-   > Task 1
-   > 
-   > Task 2
-   > 
-   ```
-   Should create 2 tasks, not fail
-
-2. **Very long task descriptions**: Should handle gracefully
-
-3. **Special characters**: Should preserve them
-   ```
-   > Task with "quotes" and @symbols
-   ```
-
-4. **Ctrl+C/Ctrl+D handling**: Should exit cleanly
-
-## File Structure After Changes
-
-```
-taskbook/
-├── cli.js                    # Modified: Add --multi flag parsing
-├── src/
-│   └── taskbook.js          # Modified: Add createTasksInteractive()
-├── test/                    # Add new tests for multi-line feature
-│   └── multi-task.test.js   # New test file
-├── readme.md                # Modified: Document --multi flag
-└── package.json             # No changes needed (readline is built-in)
-```
-
-## Implementation Steps
-
-### Step 1: Setup Environment
-```bash
-# Ensure you're in the right directory
-cd ~/dev/taskbook_xm
-
-# Verify you're on your fork
-git remote -v
-# Should show YOUR-USERNAME, not klaudiosinani
-
-# Create feature branch
-git checkout -b feature/multi-line-input
-
-# Install dependencies (if not already done)
-npm install
-
-# Test current version works
-npm test
-```
-
-### Step 2: Understand Current Code
-```bash
-# Open and read these files to understand structure:
-# - cli.js (how flags are parsed)
-# - src/taskbook.js (how createTask currently works)
-# - Look for existing interactive patterns
-
-# Find where single task creation happens
-grep -n "createTask" src/*.js
-grep -n "flags.task" cli.js
-```
-
-### Step 3: Implement the Feature
-
-1. **Modify `cli.js`**:
-   - Add `multi` to the flags definition
-   - Add conditional: if `flags.task && flags.multi` → call interactive method
-   - Update help text
-
-2. **Modify `src/taskbook.js`**:
-   - Add `createTasksInteractive()` method
-   - Use Node's built-in `readline` module
-   - Collect tasks line by line
-   - Call existing `createTask()` for each line
-
-3. **Test locally**:
-   ```bash
-   # Link your local version for testing
-   npm link
-   
-   # Now 'tb' command uses your local code
-   tb -t --multi
-   ```
-
-### Step 4: Documentation
-Update `readme.md`:
-
-```markdown
-### Create Multiple Tasks Interactively
-
-To create multiple tasks through an interactive prompt, use the `--multi` flag:
-
-\`\`\`bash
-$ tb -t --multi
-Enter tasks (one per line, press Enter twice to finish):
-> Buy groceries
-> Call dentist  
-> Write blog post
-> 
-✓ Created 3 tasks
-\`\`\`
-
-Each task can include boards and priority:
-
-\`\`\`bash
-$ tb -t --multi
-> @work Deploy app p:3
-> @personal Plan vacation p:1
-> 
-✓ Created 2 tasks
-\`\`\`
-```
-
-### Step 5: Commit and Push
-```bash
-# Stage changes
-git add cli.js src/taskbook.js readme.md
-
-# Commit with clear message
-git commit -m "feat: Add --multi flag for interactive multi-task creation
-
-- Adds --multi flag to create multiple tasks interactively
-- Users enter tasks one per line, empty line to finish
-- Each task supports @board and p:X syntax
-- Backward compatible with existing single-task syntax
-- Uses Node.js readline for interactive input"
-
-# Push to your fork
-git push origin feature/multi-line-input
-```
-
-## Code Example: Complete Implementation
-
-### `cli.js` modification
 ```javascript
-// Find the flags definition and add:
+// In cli.js
+
+// Add flag definition
 const flags = {
   // ... existing flags
   multi: {
     type: 'boolean',
-    alias: 'm',
     default: false
   }
 };
 
-// Find where task creation happens and modify:
+// In the task creation section
 if (flags.task) {
   if (flags.multi) {
-    // New interactive mode
-    taskbook.createTasksInteractive();
+    // Use editor for multi-task creation
+    taskbook.createTasksWithEditor();
   } else {
-    // Existing single task mode
+    // Single task creation (existing behavior)
     const description = input.join(' ');
     taskbook.createTask(description);
   }
 }
 ```
 
-### `src/taskbook.js` new method
-```javascript
-createTasksInteractive() {
-  const readline = require('readline');
-  
-  console.log('Enter tasks (one per line, press Enter twice to finish):');
-  
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    prompt: '> '
-  });
-  
-  const tasks = [];
-  let lastLineEmpty = false;
-  
-  rl.on('line', (line) => {
-    const trimmed = line.trim();
-    
-    if (trimmed === '') {
-      if (lastLineEmpty) {
-        // Two empty lines in a row - finish
-        rl.close();
-      } else {
-        lastLineEmpty = true;
-        rl.prompt();
-      }
-    } else {
-      lastLineEmpty = false;
-      tasks.push(trimmed);
-      rl.prompt();
-    }
-  });
-  
-  rl.on('close', () => {
-    if (tasks.length === 0) {
-      this._render.missingTasks();
-      return;
-    }
-    
-    // Create all tasks
-    tasks.forEach(description => {
-      this.createTask(description);
-    });
-    
-    console.log(`\n✓ Created ${tasks.length} task${tasks.length === 1 ? '' : 's'}`);
-  });
-  
-  rl.prompt();
-}
+## Features
+
+### 1. Editor Detection
+Respects user's editor preference in order:
+1. `$VISUAL` environment variable
+2. `$EDITOR` environment variable  
+3. Platform default (`vim` on Unix, `notepad` on Windows)
+
+### 2. Comment Support
+Lines starting with `#` are ignored - great for:
+- Instructions
+- Organizing tasks into sections
+- Temporarily disabling tasks
+
+Example:
+```
+# Work tasks
+@work Review PR #42 p:3
+@work Update documentation
+
+# Personal tasks  
+@personal Buy groceries
+# @personal Call dentist  ← commented out, won't be created
 ```
 
-## Verification Checklist
+### 3. Empty Line Handling
+Blank lines are automatically filtered out - users can organize for readability
 
-Before considering the feature complete:
+### 4. Syntax Highlighting (Future)
+Could add `.taskbook.txt` file type for syntax highlighting in editors
 
-- [ ] `tb -t --multi` prompts for input
-- [ ] Empty line ends input collection
-- [ ] Multiple tasks are created correctly
-- [ ] Tasks appear when running `tb`
-- [ ] Tasks can be checked off with `tb -c <id>`
-- [ ] Board syntax works: `@boardname`
-- [ ] Priority syntax works: `p:3`
-- [ ] Combined syntax works: `@coding Fix bug p:3`
-- [ ] Empty input shows appropriate message
-- [ ] Ctrl+C exits gracefully
-- [ ] Existing `tb -t "task"` still works (no regression)
-- [ ] Help text updated
-- [ ] README.md updated
-- [ ] Tests pass: `npm test`
+## Usage Examples
 
-## Future Enhancements (Optional)
+### Basic Usage
+```bash
+$ tb -t --multi
+# Opens editor
+# Add tasks
+# Save and close
+✓ Created 3 tasks
+```
 
-1. **File Input**: `tb -t --from tasks.txt`
-2. **Confirmation Prompt**: "Create 5 tasks? (y/n)"
-3. **Preview Mode**: Show what tasks will be created before confirming
-4. **Undo Last**: Allow removing the last entered task before finishing
+### With Custom Editor
+```bash
+# Use VS Code
+EDITOR="code --wait" tb -t --multi
 
-## Resources
+# Use nano
+EDITOR=nano tb -t --multi
 
-- Node.js readline docs: https://nodejs.org/api/readline.html
-- Taskbook contributing guide: https://github.com/klaudiosinani/taskbook/blob/master/contributing.md
-- Your fork: https://github.com/YOUR-USERNAME/taskbook
+# Set permanently in ~/.bashrc or ~/.zshrc
+export EDITOR=vim
+```
 
-## Notes for Claude Code
+### Advanced Organization
+```
+# === URGENT ===
+@work @urgent Fix production bug p:3
+@work @urgent Contact client about outage p:3
 
-When implementing in Claude Code:
+# === This Week ===
+@coding Review teammate's PR p:2
+@coding Update documentation p:1
 
-1. Start by exploring the existing codebase structure
-2. Read `cli.js` to understand flag parsing
-3. Read `src/taskbook.js` to understand task creation
-4. Follow the existing code style and patterns
-5. Test thoroughly before committing
-6. Use `npm link` to test your local version
+# === Personal ===
+@personal Buy birthday gift
+@health Schedule dentist appointment
 
----
+# === Ideas (commented out for now) ===
+# @learning Read about Rust async
+# @side-project Start blog post about X
+```
 
-**Status**: Ready for implementation
-**Priority**: Medium
-**Complexity**: Low-Medium (mostly UI/UX work, core logic exists)
+## Testing Checklist
+
+### Basic Functionality
+- [ ] `tb -t --multi` opens editor
+- [ ] After saving, tasks are created
+- [ ] Cancelling editor (Ctrl+C) doesn't create tasks
+- [ ] Empty file creates no tasks
+- [ ] Comment lines are ignored
+
+### Task Parsing
+- [ ] Single task works
+- [ ] Multiple tasks work
+- [ ] Tasks with `@board` syntax work
+- [ ] Tasks with `p:X` priority work
+- [ ] Tasks with both board and priority work
+- [ ] Empty lines between tasks are ignored
+- [ ] Leading/trailing whitespace is trimmed
+
+### Editor Compatibility
+- [ ] Works with vim
+- [ ] Works with nano
+- [ ] Works with emacs
+- [ ] Works with VS Code (`code --wait`)
+- [ ] Works with Sublime (`subl --wait`)
+- [ ] Respects `$EDITOR` variable
+- [ ] Falls back to platform default
+
+### Edge Cases
+- [ ] Very long task descriptions
+- [ ] Special characters in tasks
+- [ ] Tasks with # in the middle (not at start)
+- [ ] Unicode characters
+- [ ] 100+ tasks at once
+- [ ] File permissions issues handled gracefully
+
+## Error Handling
+
+### Scenarios to Handle
+1. **Editor not found**: Show helpful message
+   ```
+   Error: Editor 'xyz' not found
+   Please set EDITOR environment variable or use a default editor
+   ```
+
+2. **Permission denied**: Handle temp file creation issues
+   ```
+   Error: Cannot create temporary file
+   ```
+
+3. **Editor crashes**: Clean up temp file
+   ```
+   Editor exited with error. No tasks created.
+   ```
+
+4. **User cancels (Ctrl+C)**: Clean exit
+   ```
+   Task creation cancelled.
+   ```
+
+## Documentation Updates
+
+### README.md
+
+Add new section:
+
+```markdown
+### Create Multiple Tasks with Editor
+
+To create multiple tasks using your preferred editor:
+
+\`\`\`bash
+$ tb -t --multi
+\`\`\`
+
+This opens a file in your default editor where you can:
+- Add one task per line
+- Use `@board` and `p:X` syntax on each line
+- Add `#` comments to organize or disable tasks
+- Reorder tasks by moving lines
+- Delete tasks before creating them
+
+Example file:
+\`\`\`
+# Work tasks
+@work Fix production bug p:3
+@work Update documentation
+
+# Personal
+@personal Buy groceries
+@personal Call dentist
+\`\`\`
+
+Save and close the file to create all tasks at once.
+
+#### Setting Your Editor
+
+Taskbook respects the `EDITOR` environment variable:
+
+\`\`\`bash
+# Use VS Code
+export EDITOR="code --wait"
+
+# Use nano
+export EDITOR=nano
+
+# Use vim (default on Unix)
+export EDITOR=vim
+\`\`\`
+
+Add to `~/.bashrc` or `~/.zshrc` to make permanent.
+\`\`\`
+
+### Help Text (cli.js)
+
+Update:
+```
+--multi            Create multiple tasks using your editor
+```
+
+Examples:
+```
+$ tb -t --multi
+$ tb --task --multi
+```
+
+## Advantages Over Original Options
+
+### vs Option 1 (Pipe Separator)
+✅ Can edit/reorder before creating
+✅ Visual overview of all tasks
+✅ Can use comments to organize
+✅ Multi-line descriptions possible (future feature)
+
+### vs Option 3 (readline/Interactive)
+✅ Full editing power (vim/emacs users love this)
+✅ Can see all tasks at once
+✅ Can copy/paste from other sources
+✅ Familiar workflow (like git commit)
+
+## Future Enhancements
+
+1. **Syntax highlighting** - Create `.taskbook` file type
+2. **Multi-line tasks** - Use `---` separator for task bodies
+3. **Batch operations** - Edit existing tasks in editor
+4. **Templates** - Pre-fill with common task lists
+5. **Import from file** - `tb -t --from tasks.txt`
+
+## Implementation Checklist
+
+- [ ] Add `createTasksWithEditor()` to `src/taskbook.js`
+- [ ] Add `--multi` flag to `cli.js`
+- [ ] Add editor detection logic
+- [ ] Add template generation
+- [ ] Add comment filtering
+- [ ] Add error handling
+- [ ] Update README.md
+- [ ] Update help text
+- [ ] Test with vim
+- [ ] Test with nano
+- [ ] Test with VS Code
+- [ ] Test edge cases
+- [ ] Write tests
+
+## Estimated Complexity
+
+**Low-Medium**
+- Core logic: ~50 lines of code
+- Uses only built-in Node.js modules
+- Most complexity is error handling
+- Leverages existing `createTask()` method
+
+## Related Git Commands (Similar Pattern)
+
+This pattern is well-established in CLI tools:
+- `git commit` (opens editor for commit message)
+- `git rebase -i` (interactive rebase in editor)
+- `crontab -e` (edit cron jobs)
+- `visudo` (edit sudoers file)
+- `vipw` (edit password file)
+
+Users already know this workflow! 🎉
